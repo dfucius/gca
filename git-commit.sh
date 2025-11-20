@@ -565,6 +565,11 @@ if [ "$PUSH" = true ]; then
     echo "Successfully pushed changes to origin"
 fi
 
-echo "Successfully committed and pushed changes with message:"
+echo ""
+echo "================================ Commit message ================================"
+echo ""
 echo "$COMMIT_FULL"
+echo ""
+echo "===============================================================================" 
+echo ""
 debug_log "Script completed successfully"
