@@ -12,6 +12,8 @@ DEBUG=false
 PUSH=false
 # Message only flag
 MESSAGE_ONLY=false
+# Add-all flag (stage all changes before commit when enabled)
+ADD_ALL=false
 # Default providers and URLs
 PROVIDER_OPENROUTER="openrouter"
 PROVIDER_OLLAMA="ollama"
@@ -210,6 +212,10 @@ while [[ $# -gt 0 ]]; do
         PUSH=true
         shift
         ;;
+    -a)
+        ADD_ALL=true
+        shift
+        ;;
     --message-only)
         MESSAGE_ONLY=true
         shift
@@ -224,6 +230,7 @@ while [[ $# -gt 0 ]]; do
         echo "Options:"
         echo "  --debug               Enable debug mode"
         echo "  --push, -p            Push changes after commit"
+        echo "  -a                    Stage all changes (equivalent to 'git add .')"
         echo "  --message-only        Generate message only, no git add/commit/push"
         echo "  --model <model>       Use specific model (default: google/gemini-flash-1.5-8b)"
         echo "  --use-ollama          Use Ollama as provider (saves for future use)"
@@ -312,10 +319,9 @@ if [ "$PROVIDER" = "$PROVIDER_OLLAMA" ]; then
     fi
 fi
 
-# Only stage changes and check for changes if not using message-only mode
-if [ "$MESSAGE_ONLY" = false ]; then
-    # Stage all changes
-    debug_log "Staging all changes"
+# Optionally stage all changes if requested and not using message-only mode
+if [ "$MESSAGE_ONLY" = false ] && [ "$ADD_ALL" = true ]; then
+    debug_log "Staging all changes (git add .)"
     git add .
 fi
 
@@ -326,7 +332,7 @@ DIFF_CONTENT=$(git diff --cached)
 debug_log "Git changes detected" "$CHANGES"
 
 if [ -z "$CHANGES" ]; then
-    echo "No staged changes found. Please stage your changes using 'git add' first."
+    echo "No staged changes found. Please stage your changes using 'git add' first, or run 'gca -a' to stage all changes."
     exit 1
 fi
 

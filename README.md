@@ -96,7 +96,7 @@ This will:
 Set up your OpenRouter API key:
 
 ```bash
-gca <your_openrouter_api_key>
+gca --api-key <your_openrouter_api_key>
 ```
 
 The API key will be securely stored in:
@@ -195,9 +195,8 @@ Popular models for commit messages:
 
 This will:
 
-- Stage all changes
 - Generate a commit message using AI
-- Commit the changes
+- Commit the currently staged changes
 - Push to the remote repository (if --push flag is used)
 
 ### Debug Mode
@@ -232,6 +231,7 @@ Usage: gca [options] [api_key]
 Options:
   --debug               Enable debug mode
   --push, -p            Push changes after commit
+  -a                    Stage all changes (equivalent to 'git add .')
   --message-only        Generate message only, no git add/commit/push
   --model <model>       Use specific model (default: google/gemini-flash-1.5-8b)
   --use-ollama          Use Ollama as provider (saves for future use)
@@ -247,10 +247,13 @@ Options:
 
 ```bash
 # First time setup with API key
-gca <your_openrouter_api_key>
+gca --api-key <your_openrouter_api_key>
 
-# Normal usage
+# Normal usage (use staged changes only)
 gca
+
+# Stage all changes and commit
+gca -a
 
 # Use a different OpenRouter model
 gca --model "google/gemini-flash-1.5-8b"
