@@ -566,9 +566,9 @@ if [ "$PUSH" = true ]; then
 fi
 
 echo
-echo "== Commit message =="
+echo "==== Commit message ===="
 echo
 echo "$COMMIT_FULL"
 echo
-echo "===================="
+echo "========================"
 debug_log "Script completed successfully"
