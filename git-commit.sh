@@ -370,7 +370,7 @@ $DIFF_CONTENT
 Important:
 - Type must be one of: feat, fix, docs, style, refactor, perf, test, chore
 - Subject: max 70 characters, imperative mood, no period
-- Body: 1-2 very short bullet points or lines summarizing the MOST important changes (never more than 5, even for huge diffs)
+- Body: 1-3 very short bullet points or lines summarizing the MOST important changes (never more than 6, even for huge diffs)
 - For small or localized changes (one file, small prompt/docs tweak, minor refactor), use exactly ONE short bullet whenever possible
 - When there are many files/changes, group related changes into a few high-level bullets instead of listing everything
 - Focus on what and why, not how; avoid very long, detailed, or repetitive descriptions
