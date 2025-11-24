@@ -373,7 +373,7 @@ $DIFF_CONTENT
 
 Important:
 - Terminology in this prompt and in any later user feedback:
-  - "summary", "subject", "title", or "first line" = the `<type>(<scope>): <subject>` line
+  - "summary", "subject", "title", or "first line" = the <type>(<scope>): <subject> line
   - "body", "description", "details", "bullets", or "bullet points" = all lines after the first line
 - Type must be one of: feat, fix, docs, style, refactor, perf, test, chore
 - Subject: max 70 characters, imperative mood, no period
