@@ -230,8 +230,9 @@ Usage: gca [options] [api_key]
 
 Options:
   --debug               Enable debug mode
-  --push, -p            Push changes after commit
+  --push                Push changes after commit
   -a                    Stage all changes (equivalent to 'git add .')
+  -p                    Preview commit message and confirm before committing
   --message-only        Generate message only, no git add/commit/push
   --model <model>       Use specific model (default: google/gemini-flash-1.5-8b)
   --use-ollama          Use Ollama as provider (saves for future use)

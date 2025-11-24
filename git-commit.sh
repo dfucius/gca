@@ -14,6 +14,8 @@ PUSH=false
 MESSAGE_ONLY=false
 # Add-all flag (stage all changes before commit when enabled)
 ADD_ALL=false
+# Preview flag (show and optionally revise commit message before committing)
+PREVIEW=false
 # Default providers and URLs
 PROVIDER_OPENROUTER="openrouter"
 PROVIDER_OLLAMA="ollama"
@@ -208,12 +210,21 @@ while [[ $# -gt 0 ]]; do
         save_base_url "$BASE_URL"
         shift 2
         ;;
-    --push | -p)
+    --push)
         PUSH=true
         shift
         ;;
     -a)
         ADD_ALL=true
+        shift
+        ;;
+    -p)
+        PREVIEW=true
+        shift
+        ;;
+    -ap|-pa)
+        ADD_ALL=true
+        PREVIEW=true
         shift
         ;;
     --message-only)
@@ -229,8 +240,9 @@ while [[ $# -gt 0 ]]; do
         echo ""
         echo "Options:"
         echo "  --debug               Enable debug mode"
-        echo "  --push, -p            Push changes after commit"
+        echo "  --push                Push changes after commit"
         echo "  -a                    Stage all changes (equivalent to 'git add .')"
+        echo "  -p                    Preview commit message and confirm before committing"
         echo "  --message-only        Generate message only, no git add/commit/push"
         echo "  --model <model>       Use specific model (default: google/gemini-flash-1.5-8b)"
         echo "  --use-ollama          Use Ollama as provider (saves for future use)"
@@ -298,7 +310,7 @@ debug_log "API key retrieved from config"
 
 if [ -z "$API_KEY" ] && [ "$PROVIDER" = "$PROVIDER_OPENROUTER" ]; then
     echo "No API key found. Please provide the OpenRouter API key using --api-key flag"
-    echo "Usage: gca [--debug] [--push|-p] [--use-ollama] [--model <model_name>] [--base-url <url>] [--api-key <key>]"
+    echo "Usage: gca [--debug] [--push] [-a] [-p] [--use-ollama] [--model <model_name>] [--base-url <url>] [--api-key <key>]"
     exit 1
 fi
 
@@ -336,20 +348,12 @@ if [ -z "$CHANGES" ]; then
     exit 1
 fi
 
-# Set model based on provider if not explicitly specified
-if [ -z "$MODEL" ]; then
-    case "$PROVIDER" in
-    "$PROVIDER_OLLAMA")
-        MODEL="$OLLAMA_MODEL"
-        ;;
-    "$PROVIDER_OPENROUTER")
-        MODEL="$OPENROUTER_MODEL"
-        ;;
-    esac
-fi
+generate_commit_message() {
+    local previous_message="$1"
+    local extra_instructions="$2"
 
-# Assemble the user prompt with raw content; jq will escape JSON safely
-USER_CONTENT=$(cat <<EOF
+    # Assemble the user prompt with raw content; jq will escape JSON safely
+    USER_CONTENT=$(cat <<EOF
 Generate a commit message for these changes:
 
 ## File changes:
@@ -368,6 +372,9 @@ $DIFF_CONTENT
 <body>
 
 Important:
+- Terminology in this prompt and in any later user feedback:
+  - "summary", "subject", "title", or "first line" = the `<type>(<scope>): <subject>` line
+  - "body", "description", "details", "bullets", or "bullet points" = all lines after the first line
 - Type must be one of: feat, fix, docs, style, refactor, perf, test, chore
 - Subject: max 70 characters, imperative mood, no period
 - Body: 1-3 very short bullet points or lines summarizing the MOST important changes (never more than 6, even for huge diffs)
@@ -383,165 +390,202 @@ Important:
 EOF
 )
 
-# Make the API request
-case "$PROVIDER" in
-"$PROVIDER_OLLAMA")
-    debug_log "Making API request to Ollama"
-    ENDPOINT="api/generate"
-    HEADERS=(-H "Content-Type: application/json")
-    BASE_URL="http://localhost:11434"
-    REQUEST_BODY=$(jq -n \
-        --arg model "$MODEL" \
-        --arg prompt "$USER_CONTENT" \
-        '{model:$model, prompt:$prompt, stream:false}')
-    ;;
-"$PROVIDER_LMSTUDIO")
-    debug_log "Making API request to LMStudio"
-    ENDPOINT="chat/completions"
-    HEADERS=(-H "Content-Type: application/json")
-    REQUEST_BODY=$(jq -n \
-        --arg model "$MODEL" \
-        --arg content "$USER_CONTENT" \
-        '{
-           model: $model,
-           stream: false,
-           messages: [
-             {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
-             {role:"user",   content:$content}
-           ]
-         }')
-    debug_log "LMStudio request body:" "$REQUEST_BODY"
-    ;;
-"$PROVIDER_OPENROUTER")
-    debug_log "Making API request to OpenRouter"
-    ENDPOINT="chat/completions"
-    HEADERS=(
-        "HTTP-Referer: https://github.com/mrgoonie/cmai"
-        "Authorization: Bearer $API_KEY"
-        "Content-Type: application/json"
-        "X-Title: cmai - AI Commit Message Generator"
-    )
-    REQUEST_BODY=$(jq -n \
-        --arg model "$MODEL" \
-        --arg content "$USER_CONTENT" \
-        '{
-           model: $model,
-           stream: false,
-           messages: [
-             {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
-             {role:"user",   content:$content}
-           ]
-         }')
-    ;;
-"$PROVIDER_CUSTOM")
-    debug_log "Making API request to custom provider"
-    ENDPOINT="chat/completions"
-    HEADERS=(-H "Content-Type: application/json")
-    [ -n "$API_KEY" ] && HEADERS+=(-H "Authorization: Bearer ${API_KEY}")
-    REQUEST_BODY=$(jq -n \
-        --arg model "$MODEL" \
-        --arg content "$USER_CONTENT" \
-        '{
-           stream: false,
-           model: $model,
-           messages: [
-             {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
-             {role:"user",   content:$content}
-           ]
-         }')
-    ;;
-esac
+    if [ -n "$previous_message" ] && [ -n "$extra_instructions" ]; then
+        USER_CONTENT="$USER_CONTENT
 
-# Debug
-debug_log "Using provider: $PROVIDER"
-debug_log "Provider endpoint: $ENDPOINT"
-debug_log "Request headers: ${HEADERS[*]}"
-debug_log "Request model: ${MODEL}"
-debug_log "Request body: $REQUEST_BODY"
+Current draft commit message:
+<current_commit_message>
+$previous_message
+</current_commit_message>
 
-# Convert headers array to proper curl format
-CURL_HEADERS=()
-for header in "${HEADERS[@]}"; do
-    CURL_HEADERS+=(-H "$header")
-done
+Please REVISE the current commit message above (do NOT create a completely new commit),
+strictly following these user instructions:
+$extra_instructions"
+    elif [ -n "$extra_instructions" ]; then
+        USER_CONTENT="$USER_CONTENT
 
-RESPONSE=$(curl -s -X POST "$BASE_URL/$ENDPOINT" \
-    "${CURL_HEADERS[@]}" \
-    -d "$REQUEST_BODY")
-debug_log "API response received" "$RESPONSE"
-
-# Extract and clean the commit message
-case "$PROVIDER" in
-"$PROVIDER_OLLAMA")
-    # For Ollama, extract content from non-streaming response
-    if echo "$RESPONSE" | grep -q "404 page not found"; then
-        echo "Error: Ollama API endpoint not found. Make sure Ollama is running and try again."
-        echo "Run: ollama serve"
-        exit 1
+Additional instructions from the user (apply these when generating the commit message):
+$extra_instructions"
     fi
-    if echo "$RESPONSE" | grep -q "error"; then
-        ERROR=$(echo "$RESPONSE" | jq -r '.error')
-        echo "Error from Ollama: $ERROR"
-        exit 1
-    fi
-    COMMIT_FULL=$(echo "$RESPONSE" | jq -r '.response // empty')
+
+    # Make the API request
+    case "$PROVIDER" in
+    "$PROVIDER_OLLAMA")
+        debug_log "Making API request to Ollama"
+        ENDPOINT="api/generate"
+        HEADERS=(-H "Content-Type: application/json")
+        BASE_URL="http://localhost:11434"
+        REQUEST_BODY=$(jq -n \
+            --arg model "$MODEL" \
+            --arg prompt "$USER_CONTENT" \
+            '{model:$model, prompt:$prompt, stream:false}')
+        ;;
+    "$PROVIDER_LMSTUDIO")
+        debug_log "Making API request to LMStudio"
+        ENDPOINT="chat/completions"
+        HEADERS=(-H "Content-Type: application/json")
+        REQUEST_BODY=$(jq -n \
+            --arg model "$MODEL" \
+            --arg content "$USER_CONTENT" \
+            '{
+               model: $model,
+               stream: false,
+               messages: [
+                 {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
+                 {role:"user",   content:$content}
+               ]
+             }')
+        debug_log "LMStudio request body:" "$REQUEST_BODY"
+        ;;
+    "$PROVIDER_OPENROUTER")
+        debug_log "Making API request to OpenRouter"
+        ENDPOINT="chat/completions"
+        HEADERS=(
+            "HTTP-Referer: https://github.com/mrgoonie/cmai"
+            "Authorization: Bearer $API_KEY"
+            "Content-Type: application/json"
+            "X-Title: cmai - AI Commit Message Generator"
+        )
+        REQUEST_BODY=$(jq -n \
+            --arg model "$MODEL" \
+            --arg content "$USER_CONTENT" \
+            '{
+               model: $model,
+               stream: false,
+               messages: [
+                 {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
+                 {role:"user",   content:$content}
+               ]
+             }')
+        ;;
+    "$PROVIDER_CUSTOM")
+        debug_log "Making API request to custom provider"
+        ENDPOINT="chat/completions"
+        HEADERS=(-H "Content-Type: application/json")
+        [ -n "$API_KEY" ] && HEADERS+=(-H "Authorization: Bearer ${API_KEY}")
+        REQUEST_BODY=$(jq -n \
+            --arg model "$MODEL" \
+            --arg content "$USER_CONTENT" \
+            '{
+               stream: false,
+               model: $model,
+               messages: [
+                 {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
+                 {role:"user",   content:$content}
+               ]
+             }')
+        ;;
+    esac
+
+    # Debug
+    debug_log "Using provider: $PROVIDER"
+    debug_log "Provider endpoint: $ENDPOINT"
+    debug_log "Request headers: ${HEADERS[*]}"
+    debug_log "Request model: ${MODEL}"
+    debug_log "Request body: $REQUEST_BODY"
+
+    # Convert headers array to proper curl format
+    CURL_HEADERS=()
+    for header in "${HEADERS[@]}"; do
+        CURL_HEADERS+=(-H "$header")
+    done
+
+    RESPONSE=$(curl -s -X POST "$BASE_URL/$ENDPOINT" \
+        "${CURL_HEADERS[@]}" \
+        -d "$REQUEST_BODY")
+    debug_log "API response received" "$RESPONSE"
+
+    # Extract and clean the commit message
+    case "$PROVIDER" in
+    "$PROVIDER_OLLAMA")
+        # For Ollama, extract content from non-streaming response
+        if echo "$RESPONSE" | grep -q "404 page not found"; then
+            echo "Error: Ollama API endpoint not found. Make sure Ollama is running and try again."
+            echo "Run: ollama serve"
+            exit 1
+        fi
+        if echo "$RESPONSE" | grep -q "error"; then
+            ERROR=$(echo "$RESPONSE" | jq -r '.error')
+            echo "Error from Ollama: $ERROR"
+            exit 1
+        fi
+        COMMIT_FULL=$(echo "$RESPONSE" | jq -r '.response // empty')
+        if [ -z "$COMMIT_FULL" ]; then
+            echo "Error: Failed to get response from Ollama. Response: $RESPONSE"
+            exit 1
+        fi
+        ;;
+    "$PROVIDER_LMSTUDIO")
+        # For LMStudio, extract content from response
+        debug_log "LMStudio raw response:" "$RESPONSE"
+
+        # Check if response is HTML error page
+        if echo "$RESPONSE" | grep -q "<!DOCTYPE html>"; then
+            echo "Error: LMStudio API returned HTML error. Make sure LMStudio is running and the API is accessible."
+            echo "Response: $RESPONSE"
+            exit 1
+        fi
+
+        # Check for JSON error - only if there's an actual error field with content
+        if echo "$RESPONSE" | jq -e '.error' >/dev/null 2>&1; then
+            ERROR=$(echo "$RESPONSE" | jq -r '.error.message // .error' 2>/dev/null)
+            echo "Error from LMStudio: $ERROR"
+            exit 1
+        fi
+
+        # Try to extract content with proper error handling
+        COMMIT_FULL=$(echo "$RESPONSE" | jq -r '.choices[0].message.content' 2>/dev/null)
+        if [ $? -ne 0 ] || [ -z "$COMMIT_FULL" ] || [ "$COMMIT_FULL" = "null" ]; then
+            echo "Error: Failed to parse LMStudio response. Response format may be unexpected."
+            echo "Response: $RESPONSE"
+            exit 1
+        fi
+        ;;
+    "$PROVIDER_OPENROUTER" | "$PROVIDER_CUSTOM")
+        # For OpenRouter and custom providers
+        COMMIT_FULL=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+
+        # If jq fails or returns null, fallback to grep method
+        if [ -z "$COMMIT_FULL" ] || [ "$COMMIT_FULL" = "null" ]; then
+            COMMIT_FULL=$(echo "$RESPONSE" | grep -o '"content":"[^"]*"' | cut -d'"' -f4)
+        fi
+        ;;
+    esac
+
+    # Clean the message:
+    # 1. Preserve the structure of the commit message
+    # 2. Clean up escape sequences
+    COMMIT_FULL=$(echo "$COMMIT_FULL" |
+        sed 's/\\n/\n/g' |
+        sed 's/\\r//g' |
+        sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
+        sed 's/\\[[:alpha:]]//g')
+
+    debug_log "Extracted commit message" "$COMMIT_FULL"
+
     if [ -z "$COMMIT_FULL" ]; then
-        echo "Error: Failed to get response from Ollama. Response: $RESPONSE"
+        echo "Failed to generate commit message. API response:"
+        echo "$RESPONSE"
         exit 1
     fi
-    ;;
-"$PROVIDER_LMSTUDIO")
-    # For LMStudio, extract content from response
-    debug_log "LMStudio raw response:" "$RESPONSE"
+}
 
-    # Check if response is HTML error page
-    if echo "$RESPONSE" | grep -q "<!DOCTYPE html>"; then
-        echo "Error: LMStudio API returned HTML error. Make sure LMStudio is running and the API is accessible."
-        echo "Response: $RESPONSE"
-        exit 1
-    fi
+generate_commit_message "" ""
 
-    # Check for JSON error - only if there's an actual error field with content
-    if echo "$RESPONSE" | jq -e '.error' >/dev/null 2>&1; then
-        ERROR=$(echo "$RESPONSE" | jq -r '.error.message // .error' 2>/dev/null)
-        echo "Error from LMStudio: $ERROR"
-        exit 1
-    fi
-
-    # Try to extract content with proper error handling
-    COMMIT_FULL=$(echo "$RESPONSE" | jq -r '.choices[0].message.content' 2>/dev/null)
-    if [ $? -ne 0 ] || [ -z "$COMMIT_FULL" ] || [ "$COMMIT_FULL" = "null" ]; then
-        echo "Error: Failed to parse LMStudio response. Response format may be unexpected."
-        echo "Response: $RESPONSE"
-        exit 1
-    fi
-    ;;
-"$PROVIDER_OPENROUTER" | "$PROVIDER_CUSTOM")
-    # For OpenRouter and custom providers
-    COMMIT_FULL=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-
-    # If jq fails or returns null, fallback to grep method
-    if [ -z "$COMMIT_FULL" ] || [ "$COMMIT_FULL" = "null" ]; then
-        COMMIT_FULL=$(echo "$RESPONSE" | grep -o '"content":"[^"]*"' | cut -d'"' -f4)
-    fi
-    ;;
-esac
-
-# Clean the message:
-# 1. Preserve the structure of the commit message
-# 2. Clean up escape sequences
-COMMIT_FULL=$(echo "$COMMIT_FULL" |
-    sed 's/\\n/\n/g' |
-    sed 's/\\r//g' |
-    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
-    sed 's/\\[[:alpha:]]//g')
-
-debug_log "Extracted commit message" "$COMMIT_FULL"
-
-if [ -z "$COMMIT_FULL" ]; then
-    echo "Failed to generate commit message. API response:"
-    echo "$RESPONSE"
-    exit 1
+if [ "$PREVIEW" = true ] && [ "$MESSAGE_ONLY" = false ]; then
+    while true; do
+        echo
+        echo "==== Commit message preview ===="
+        echo
+        echo "$COMMIT_FULL"
+        echo
+        echo "Press Enter to accept and commit, type instructions to revise, or Ctrl+C to cancel:"
+        read -r USER_FEEDBACK
+        if [ -z "$USER_FEEDBACK" ]; then
+            break
+        fi
+        generate_commit_message "$COMMIT_FULL" "$USER_FEEDBACK"
+    done
 fi
 
 if [ "$MESSAGE_ONLY" = true ]; then
