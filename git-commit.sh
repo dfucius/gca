@@ -16,6 +16,11 @@ MESSAGE_ONLY=false
 ADD_ALL=false
 # Preview flag (show and optionally revise commit message before committing)
 PREVIEW=false
+
+# Colors for nicer terminal output (fallback to plain text if disabled)
+COLOR_PREVIEW="\033[1;33m"  # bright yellow (orange-ish)
+COLOR_COMMIT="\033[0;32m"        # green for final commit message
+COLOR_RESET="\033[0m"
 # Default providers and URLs
 PROVIDER_OPENROUTER="openrouter"
 PROVIDER_OLLAMA="ollama"
@@ -348,6 +353,9 @@ if [ -z "$CHANGES" ]; then
     exit 1
 fi
 
+# Global conversation history for chat providers (JSON array of message objects)
+CONVERSATION_HISTORY="[]"
+
 generate_commit_message() {
     local previous_message="$1"
     local extra_instructions="$2"
@@ -377,12 +385,13 @@ Important:
   - "body", "description", "details", "bullets", or "bullet points" = all lines after the first line
 - Type must be one of: feat, fix, docs, style, refactor, perf, test, chore
 - Subject: max 70 characters, imperative mood, no period
-- Body: 1-3 very short bullet points or lines summarizing the MOST important changes (never more than 6, even for huge diffs)
+- Body: OPTIONAL. Only include if needed. 1-3 very short bullet points or lines summarizing the MOST important changes (never more than 6, even for huge diffs)
 - For small or localized changes (one file, small prompt/docs tweak, minor refactor), use exactly ONE short bullet whenever possible
 - When there are many files/changes, group related changes into a few high-level bullets instead of listing everything
 - Focus on what and why, not how; avoid very long, detailed, or repetitive descriptions
-- Produce exactly ONE commit: a single '<type>(<scope>): <subject>' line followed by the body; do not create multiple feat(...), fix(...), etc. sections
+- Produce exactly ONE commit: a single '<type>(<scope>): <subject>' line optionally followed by the body; do not create multiple feat(...), fix(...), etc. sections
 - Do not add extra headings or section titles; body should be just bullets or short lines under the summary
+- The body can be completely omitted if the summary is self-explanatory. If user says "remove body" or "remove description", output ONLY the summary line with NO body at all.
 - Scope: max 3 words
 - For minor changes: use 'fix' instead of 'feat'
 - Do not wrap your response in triple backticks
@@ -420,60 +429,50 @@ $extra_instructions"
             --arg prompt "$USER_CONTENT" \
             '{model:$model, prompt:$prompt, stream:false}')
         ;;
-    "$PROVIDER_LMSTUDIO")
-        debug_log "Making API request to LMStudio"
+    "$PROVIDER_LMSTUDIO" | "$PROVIDER_OPENROUTER" | "$PROVIDER_CUSTOM")
+        debug_log "Making API request to chat provider: $PROVIDER"
         ENDPOINT="chat/completions"
-        HEADERS=(-H "Content-Type: application/json")
+        
+        # Set provider-specific headers
+        if [ "$PROVIDER" = "$PROVIDER_OPENROUTER" ]; then
+            HEADERS=(
+                "HTTP-Referer: https://github.com/mrgoonie/cmai"
+                "Authorization: Bearer $API_KEY"
+                "Content-Type: application/json"
+                "X-Title: cmai - AI Commit Message Generator"
+            )
+        elif [ "$PROVIDER" = "$PROVIDER_CUSTOM" ]; then
+            HEADERS=(-H "Content-Type: application/json")
+            [ -n "$API_KEY" ] && HEADERS+=(-H "Authorization: Bearer ${API_KEY}")
+        else
+            HEADERS=(-H "Content-Type: application/json")
+        fi
+        
+        SYSTEM_PROMPT="You are an expert git commit message generator following the Conventional Commits format. Your task is to create or revise commit messages based on code diffs and user feedback. When the user asks you to revise a message, carefully apply their specific instructions (like 'remove body', 'make it shorter', 'add more detail', etc.) to the current draft. You understand terms like 'summary'/'subject'/'title'/'first line' refer to the first line, and 'body'/'description'/'details'/'bullets' refer to lines after the first. Always output ONLY the commit message itself with no extra commentary."
+        
+        # Initialize conversation on first call
+        if [ "$CONVERSATION_HISTORY" = "[]" ]; then
+            CONVERSATION_HISTORY=$(jq -n \
+                --arg system "$SYSTEM_PROMPT" \
+                --arg user "$USER_CONTENT" \
+                '[{role:"system", content:$system}, {role:"user", content:$user}]')
+        else
+            # Append new user message to history
+            CONVERSATION_HISTORY=$(echo "$CONVERSATION_HISTORY" | jq \
+                --arg user "$USER_CONTENT" \
+                '. += [{role:"user", content:$user}]')
+        fi
+        
         REQUEST_BODY=$(jq -n \
             --arg model "$MODEL" \
-            --arg content "$USER_CONTENT" \
+            --argjson messages "$CONVERSATION_HISTORY" \
             '{
                model: $model,
                stream: false,
-               messages: [
-                 {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
-                 {role:"user",   content:$content}
-               ]
+               messages: $messages
              }')
-        debug_log "LMStudio request body:" "$REQUEST_BODY"
-        ;;
-    "$PROVIDER_OPENROUTER")
-        debug_log "Making API request to OpenRouter"
-        ENDPOINT="chat/completions"
-        HEADERS=(
-            "HTTP-Referer: https://github.com/mrgoonie/cmai"
-            "Authorization: Bearer $API_KEY"
-            "Content-Type: application/json"
-            "X-Title: cmai - AI Commit Message Generator"
-        )
-        REQUEST_BODY=$(jq -n \
-            --arg model "$MODEL" \
-            --arg content "$USER_CONTENT" \
-            '{
-               model: $model,
-               stream: false,
-               messages: [
-                 {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
-                 {role:"user",   content:$content}
-               ]
-             }')
-        ;;
-    "$PROVIDER_CUSTOM")
-        debug_log "Making API request to custom provider"
-        ENDPOINT="chat/completions"
-        HEADERS=(-H "Content-Type: application/json")
-        [ -n "$API_KEY" ] && HEADERS+=(-H "Authorization: Bearer ${API_KEY}")
-        REQUEST_BODY=$(jq -n \
-            --arg model "$MODEL" \
-            --arg content "$USER_CONTENT" \
-            '{
-               stream: false,
-               model: $model,
-               messages: [
-                 {role:"system", content:"You are a git commit message generator. Create conventional commit messages."},
-                 {role:"user",   content:$content}
-               ]
-             }')
+        
+        debug_log "Chat provider request body:" "$REQUEST_BODY"
         ;;
     esac
 
@@ -549,6 +548,13 @@ $extra_instructions"
         if [ -z "$COMMIT_FULL" ] || [ "$COMMIT_FULL" = "null" ]; then
             COMMIT_FULL=$(echo "$RESPONSE" | grep -o '"content":"[^"]*"' | cut -d'"' -f4)
         fi
+        
+        # Append assistant response to conversation history for chat providers
+        if [ "$PROVIDER" != "$PROVIDER_OLLAMA" ]; then
+            CONVERSATION_HISTORY=$(echo "$CONVERSATION_HISTORY" | jq \
+                --arg assistant "$COMMIT_FULL" \
+                '. += [{role:"assistant", content:$assistant}]')
+        fi
         ;;
     esac
 
@@ -575,11 +581,13 @@ generate_commit_message "" ""
 if [ "$PREVIEW" = true ] && [ "$MESSAGE_ONLY" = false ]; then
     while true; do
         echo
-        echo "==== Commit message preview ===="
+        printf "%b\n" "${COLOR_PREVIEW}==== Commit message preview ====${COLOR_RESET}"
         echo
-        echo "$COMMIT_FULL"
+        printf "%s\n" "$COMMIT_FULL"
         echo
-        echo "Press Enter to accept and commit, type instructions to revise, or Ctrl+C to cancel:"
+        printf "%b\n" "${COLOR_PREVIEW}================================${COLOR_RESET}"
+        echo
+        printf "%b" "${COLOR_PREVIEW}Press Enter to accept and commit, type instructions to revise, or Ctrl+C to cancel:${COLOR_RESET} "
         read -r USER_FEEDBACK
         if [ -z "$USER_FEEDBACK" ]; then
             break
@@ -615,9 +623,9 @@ if [ "$PUSH" = true ]; then
 fi
 
 echo
-echo "==== Commit message ===="
+printf "%b\n" "${COLOR_COMMIT}==== Commit message ====${COLOR_RESET}"
 echo
-echo "$COMMIT_FULL"
+printf "%s\n" "$COMMIT_FULL"
 echo
-echo "========================"
+printf "%b\n" "${COLOR_COMMIT}================================${COLOR_RESET}"
 debug_log "Script completed successfully"

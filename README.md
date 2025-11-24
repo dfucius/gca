@@ -434,15 +434,3 @@ MIT License - see LICENSE file for details
 
 - [OpenRouter](https://openrouter.ai/) for providing the AI API
 - [Conventional Commits](https://www.conventionalcommits.org/) for the commit message format
-
-## My other products
-
-- [DigiCord AI](https://digicord.site) - The Most Useful AI Chatbot on Discord
-- [IndieBacklink.com](https://indiebacklink.com) - Indie Makers Unite: Feature, Support, Succeed
-- [TopRanking.ai](https://topranking.ai) - AI Directory, listing AI products
-- [ZII.ONE](https://zii.one) - Personalized Link Shortener
-- [VidCap.xyz](https://vidcap.xyz) - Extract Youtube caption, download videos, capture screenshot, summarize,…
-- [ReadTube.me](https://readtube.me) - Write blog articles based on Youtube videos
-- [BoostTogether.com](https://boosttogether.com) - The Power of WE in Advertising
-- [AIVN.Site](https://aivn.site) - Face Swap, Remove BG, Photo Editor,…
-- [DxUp.dev](https://dxup.dev) - Developer-focused platform for app deployment & centralized cloud resource management.
