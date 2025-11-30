@@ -343,9 +343,37 @@ if [ "$MESSAGE_ONLY" = false ] && [ "$ADD_ALL" = true ]; then
 fi
 
 # Use a single, readable format for all providers (jq will handle JSON escaping)
-CHANGES=$(git diff --cached --name-status | tr '\t' ' ' | sed 's/  */ /g')
-# Get git diff for context
-DIFF_CONTENT=$(git diff --cached)
+# IMPORTANT: never send .env-style files to the model, but allow .env.example templates
+# We exclude:
+# - .env
+# - .env.* (e.g. .env.local, .env.production) — EXCEPT *.env.example
+# - *.env and *.env.* (e.g. app.env, app.env.local) — EXCEPT *.env.example
+CHANGES=$(
+    {
+        git diff --cached --name-status -- \
+            . \
+            ':(exclude).env' \
+            ':(exclude).env.*' \
+            ':(exclude)*.env' \
+            ':(exclude)*.env.*'
+        # Explicitly re-include any staged *.env.example files in the summary
+        git diff --cached --name-status -- '*.env.example' 2>/dev/null || true
+    } | tr '\t' ' ' | sed 's/  */ /g'
+)
+
+# Get git diff for context, with the same exclusions but re-adding *.env.example diffs
+DIFF_CONTENT=$(
+    {
+        git diff --cached -- \
+            . \
+            ':(exclude).env' \
+            ':(exclude).env.*' \
+            ':(exclude)*.env' \
+            ':(exclude)*.env.*'
+        # Explicitly re-include any staged *.env.example diffs
+        git diff --cached -- '*.env.example' 2>/dev/null || true
+    }
+)
 debug_log "Git changes detected" "$CHANGES"
 
 if [ -z "$CHANGES" ]; then
